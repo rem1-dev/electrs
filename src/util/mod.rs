@@ -91,10 +91,14 @@ where
     F: Send + 'static,
     T: Send + 'static,
 {
-    thread::Builder::new()
+    match thread::Builder::new()
         .name(name.to_owned())
-        .spawn(f)
-        .unwrap()
+        .spawn(f) {
+        Ok(handle) => { handle }
+        Err(err) => {
+            panic!("failed to spawn thread, error: {}", err);
+        }
+    }
 }
 
 // Similar to https://doc.rust-lang.org/std/primitive.bool.html#method.then (nightly only),

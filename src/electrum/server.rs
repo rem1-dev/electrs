@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
-use std::sync::mpsc::{Sender, SyncSender, TrySendError};
+use std::sync::mpsc::{RecvError, Sender, SendError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
@@ -516,9 +516,14 @@ impl Connection {
     fn send_values(&mut self, values: &[Value]) -> Result<()> {
         for value in values {
             let line = value.to_string() + "\n";
-            self.stream
+            match  self.stream
                 .write_all(line.as_bytes())
-                .chain_err(|| format!("failed to send {}", value))?;
+                .chain_err(|| format!("failed to send {}", value)) {
+                Ok(_) => {}
+                Err(err) => {
+                    error!("failed to write to stream, error: {}", err);
+                }
+            }
         }
         Ok(())
     }
@@ -599,7 +604,12 @@ impl Connection {
             } else {
                 if line.starts_with(&[22, 3, 1]) {
                     // (very) naive SSL handshake detection
-                    let _ = tx.send(Message::Done);
+                    match tx.send(Message::Done) {
+                        Ok(_) => {}
+                        Err(err) => {
+                            error!("tx.send error: {}", err);
+                        }
+                    }
                     bail!("invalid request - maybe SSL-encrypted data?: {:?}", line)
                 }
                 match String::from_utf8(line) {
@@ -607,7 +617,12 @@ impl Connection {
                         .send(Message::Request(req))
                         .chain_err(|| "channel closed")?,
                     Err(err) => {
-                        let _ = tx.send(Message::Done);
+                        match tx.send(Message::Done) {
+                            Ok(_) => {}
+                            Err(err) => {
+                                error!("tx.send error: {}", err);
+                            }
+                        }
                         bail!("invalid UTF8: {}", err)
                     }
                 }
@@ -635,9 +650,20 @@ impl Connection {
             .sub(self.status_hashes.len() as i64);
 
         debug!("[{}] shutting down connection", self.addr);
-        conditionally_log_rpc_event!(self, json!({ "event": "connection closed" }));
 
-        let _ = self.stream.shutdown(Shutdown::Both);
+
+        match self.stream.shutdown(Shutdown::Both) {
+            Ok(_) => {
+                trace!("stream closed on both sides");
+                conditionally_log_rpc_event!(self, json!({ "event": "connection closed" }));
+            }
+            Err(err) => {
+                // from shutdown docs: on macOS, shutdown will return ErrorKind::NotConnected
+                if err.raw_os_error() != Some(57) {
+                    error!("stream shutdown error: {}", err);
+                }
+            }
+        }
         if let Err(err) = child.join().expect("receiver panicked") {
             error!("[{}] receiver failed: {}", self.addr, err);
         }
@@ -791,49 +817,73 @@ impl RPC {
                 let mut threads = HashMap::new();
                 let (garbage_sender, garbage_receiver) = crossbeam_channel::unbounded();
 
-                while let Some((stream, addr)) = acceptor.receiver().recv().unwrap() {
-                    // explicitely scope the shadowed variables for the new thread
-                    let query = Arc::clone(&query);
-                    let senders = Arc::clone(&senders);
-                    let stats = Arc::clone(&stats);
-                    let garbage_sender = garbage_sender.clone();
-                    #[cfg(feature = "electrum-discovery")]
-                    let discovery = discovery.clone();
-                    let rpc_logging = config.electrum_rpc_logging.clone();
-
-                    let spawned = spawn_thread("peer", move || {
-                        info!("[{}] connected peer", addr);
-                        let conn = Connection::new(
-                            query,
-                            stream,
-                            addr,
-                            stats,
-                            txs_limit,
+                loop {
+                    match acceptor.receiver().recv() {
+                        Ok(Some((stream, addr))) => {
+                            // explicitely scope the shadowed variables for the new thread
+                            let query = Arc::clone(&query);
+                            let senders = Arc::clone(&senders);
+                            let stats = Arc::clone(&stats);
+                            let garbage_sender = garbage_sender.clone();
                             #[cfg(feature = "electrum-discovery")]
-                            discovery,
-                            rpc_logging,
-                        );
-                        senders.lock().unwrap().push(conn.chan.sender());
-                        conn.run();
-                        info!("[{}] disconnected peer", addr);
-                        let _ = garbage_sender.send(std::thread::current().id());
-                    });
+                                let discovery = discovery.clone();
+                            let rpc_logging = config.electrum_rpc_logging.clone();
 
-                    trace!("[{}] spawned {:?}", addr, spawned.thread().id());
-                    threads.insert(spawned.thread().id(), spawned);
-                    while let Ok(id) = garbage_receiver.try_recv() {
-                        if let Some(thread) = threads.remove(&id) {
-                            trace!("[{}] joining {:?}", addr, id);
-                            if let Err(error) = thread.join() {
-                                error!("failed to join {:?}: {:?}", id, error);
+                            let spawned = spawn_thread("peer", move || {
+                                info!("[{}] connected peer", addr);
+                                let conn = Connection::new(
+                                    query,
+                                    stream,
+                                    addr,
+                                    stats,
+                                    txs_limit,
+                                    #[cfg(feature = "electrum-discovery")]
+                                        discovery,
+                                    rpc_logging,
+                                );
+                                senders.lock().unwrap().push(conn.chan.sender());
+                                conn.run();
+                                info!("[{}] disconnected peer", addr);
+                                match garbage_sender.send(std::thread::current().id()) {
+                                    Ok(_) => {}
+                                    Err(err) => {
+                                        error!("Thread send error: {}", err);
+                                    }
+                                }
+                            });
+
+                            trace!("[{}] spawned {:?}", addr, spawned.thread().id());
+                            threads.insert(spawned.thread().id(), spawned);
+
+
+                            while let Ok(id) = garbage_receiver.try_recv() {
+                                if let Some(thread) = threads.remove(&id) {
+                                    trace!("[{}] joining {:?}", addr, id);
+                                    if let Err(error) = thread.join() {
+                                        error!("failed to join {:?}: {:?}", id, error);
+                                    }
+                                }
                             }
+                        },
+                        Ok(None) => {
+                            trace!("acceptor receiver empty");
+                            break;
+                        },
+                        Err(e) => {
+                            error!("Error receiving from acceptor: {:?}", e);
+                            break;
                         }
                     }
                 }
 
                 trace!("closing {} RPC connections", senders.lock().unwrap().len());
                 for sender in senders.lock().unwrap().iter() {
-                    let _ = sender.send(Message::Done);
+                    match sender.send(Message::Done) {
+                        Ok(_) => {}
+                        Err(err) => {
+                            error!("SyncSender send error: {}", err);
+                        }
+                    }
                 }
 
                 for (id, thread) in threads {
