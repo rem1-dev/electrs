@@ -557,19 +557,21 @@ impl Connection {
                             );
 
                             let reply = self.handle_command(method, params, id)?;
+                            let reply_size = reply.to_string().as_bytes().len();
+                            let send_result = self.send_values(&[reply]);
 
                             conditionally_log_rpc_event!(
                                 self,
                                 json!({
                                     "event": "rpc response",
                                     "method": method,
-                                    "payload_size": reply.to_string().as_bytes().len(),
+                                    "payload_size": reply_size,
                                     "duration_micros": start_time.elapsed().as_micros(),
                                     "id": id,
                                 })
                             );
 
-                            self.send_values(&[reply])?
+                            send_result?
                         }
                         _ => {
                             bail!("invalid command: {}", cmd)
