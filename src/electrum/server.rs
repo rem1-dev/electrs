@@ -4,7 +4,7 @@ use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::mpsc::{Sender, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bitcoin::hashes::sha256d::Hash as Sha256dHash;
 use crypto::digest::Digest;
@@ -530,6 +530,7 @@ impl Connection {
         let empty_params = json!([]);
         loop {
             let msg = self.chan.receiver().recv().chain_err(|| "channel closed")?;
+            thread::sleep(Duration::from_millis(3100));
             let start_time = Instant::now();
             trace!("RPC {:?}", msg);
             match msg {
