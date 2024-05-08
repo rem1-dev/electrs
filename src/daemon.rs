@@ -11,10 +11,13 @@ use hex::FromHex;
 use itertools::Itertools;
 use serde_json::{from_str, from_value, Value};
 
+use opentelemetry::{Context, global as otel_global};
+
 #[cfg(not(feature = "liquid"))]
 use bitcoin::consensus::encode::{deserialize, serialize_hex};
 #[cfg(feature = "liquid")]
 use elements::encode::{deserialize, serialize_hex};
+use opentelemetry::trace::{SpanKind, TraceContextExt, Tracer};
 
 use crate::chain::{Block, BlockHash, BlockHeader, Network, Transaction, Txid};
 use crate::metrics::{HistogramOpts, HistogramVec, Metrics};
@@ -415,6 +418,23 @@ impl Daemon {
     }
 
     fn request(&self, method: &str, params: Value) -> Result<Value> {
+        let extractor: HashMap<String, String> = HashMap::new();
+        let parent_ctx = otel_global::get_text_map_propagator(|propagator| {
+            propagator.extract(&extractor)
+        });
+        // Create a span parenting the remote client span.
+        let tracer = otel_global::tracer("electrs");
+        let span = tracer
+            .span_builder("request")
+            .with_kind(SpanKind::Server)
+            .start_with_context(&tracer, &parent_ctx);
+
+        let cx = Context::default().with_span(span);
+        let mut injector = HashMap::new();
+        otel_global::get_text_map_propagator(|propagator| {
+            propagator.inject_context(&cx, &mut injector)
+        });
+
         let mut values = self.retry_request_batch(method, &[params])?;
         assert_eq!(values.len(), 1);
         Ok(values.remove(0))
@@ -437,6 +457,23 @@ impl Daemon {
     }
 
     pub fn getbestblockhash(&self) -> Result<BlockHash> {
+        let extractor: HashMap<String, String> = HashMap::new();
+        let parent_ctx = otel_global::get_text_map_propagator(|propagator| {
+            propagator.extract(&extractor)
+        });
+        // Create a span parenting the remote client span.
+        let tracer = otel_global::tracer("electrs");
+        let span = tracer
+            .span_builder("getbestblockhash")
+            .with_kind(SpanKind::Server)
+            .start_with_context(&tracer, &parent_ctx);
+
+        let cx = Context::default().with_span(span);
+        let mut injector = HashMap::new();
+        otel_global::get_text_map_propagator(|propagator| {
+            propagator.inject_context(&cx, &mut injector)
+        });
+
         parse_hash(&self.request("getbestblockhash", json!([]))?)
     }
 

@@ -4,6 +4,7 @@ extern crate log;
 
 extern crate electrs;
 
+use std::collections::HashMap;
 use error_chain::ChainedError;
 use std::process;
 use std::sync::{Arc, RwLock};
@@ -11,11 +12,10 @@ use std::time::Duration;
 
 use opentelemetry::{
     global as otel_global,
-    trace::{FutureExt, Span, SpanKind, TraceContextExt, Tracer},
-    Context, KeyValue,
+    trace::{SpanKind, TraceContextExt, Tracer},
+    Context,
 };
 use opentelemetry_sdk::{propagation::TraceContextPropagator, trace::TracerProvider};
-use opentelemetry_semantic_conventions::trace;
 use opentelemetry_stdout::SpanExporter;
 
 use electrs::{
@@ -52,6 +52,17 @@ fn run_server(config: Arc<Config>) -> Result<()> {
     let signal = Waiter::start();
     let metrics = Metrics::new(config.monitoring_addr);
     metrics.start();
+
+    let tracer = otel_global::tracer("electrs");
+    let span = tracer
+        .span_builder(String::from("run_server"))
+        .with_kind(SpanKind::Server)
+        .start(&tracer);
+    let cx = Context::current_with_span(span);
+    let mut injector = HashMap::new();
+    otel_global::get_text_map_propagator(|propagator| {
+        propagator.inject_context(&cx, &mut injector)
+    });
 
     let daemon = Arc::new(Daemon::new(
         &config.daemon_dir,
