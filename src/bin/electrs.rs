@@ -9,6 +9,15 @@ use std::process;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use opentelemetry::{
+    global as otel_global,
+    trace::{FutureExt, Span, SpanKind, TraceContextExt, Tracer},
+    Context, KeyValue,
+};
+use opentelemetry_sdk::{propagation::TraceContextPropagator, trace::TracerProvider};
+use opentelemetry_semantic_conventions::trace;
+use opentelemetry_stdout::SpanExporter;
+
 use electrs::{
     config::Config,
     daemon::Daemon,
@@ -138,7 +147,20 @@ fn run_server(config: Arc<Config>) -> Result<()> {
     Ok(())
 }
 
+fn init_tracer() {
+    otel_global::set_text_map_propagator(TraceContextPropagator::new());
+
+    // Setup tracerprovider with stdout exporter
+    // that prints the spans to stdout.
+    let provider = TracerProvider::builder()
+        .with_simple_exporter(SpanExporter::default())
+        .build();
+
+    otel_global::set_tracer_provider(provider);
+}
+
 fn main() {
+    init_tracer();
     let config = Arc::new(Config::from_args());
     if let Err(e) = run_server(config) {
         error!("server failed: {}", e.display_chain());
