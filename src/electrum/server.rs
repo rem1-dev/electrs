@@ -17,6 +17,8 @@ use serde_json::{from_str, Value};
 use bitcoin::consensus::encode::serialize_hex;
 #[cfg(feature = "liquid")]
 use elements::encode::serialize_hex;
+use opentelemetry::trace::{SpanKind, TraceContextExt, Tracer};
+use opentelemetry::{Context, global as otel_global};
 
 use crate::chain::Txid;
 use crate::config::{Config, RpcLogging};
@@ -98,6 +100,7 @@ macro_rules! conditionally_log_rpc_event {
         }
     };
 }
+
 
 struct Connection {
     query: Arc<Query>,
@@ -413,6 +416,13 @@ impl Connection {
     }
 
     fn handle_command(&mut self, method: &str, params: &[Value], id: &Value) -> Result<Value> {
+
+        let tracer = otel_global::tracer("electrs");
+        let _ = tracer
+            .span_builder("handle_command")
+            .with_kind(SpanKind::Server)
+            .start(&tracer);
+
         let timer = self
             .stats
             .latency

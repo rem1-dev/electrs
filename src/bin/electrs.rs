@@ -54,15 +54,10 @@ fn run_server(config: Arc<Config>) -> Result<()> {
     metrics.start();
 
     let tracer = otel_global::tracer("electrs");
-    let span = tracer
+    let _ = tracer
         .span_builder(String::from("run_server"))
         .with_kind(SpanKind::Server)
         .start(&tracer);
-    let cx = Context::current_with_span(span);
-    let mut injector = HashMap::new();
-    otel_global::get_text_map_propagator(|propagator| {
-        propagator.inject_context(&cx, &mut injector)
-    });
 
     let daemon = Arc::new(Daemon::new(
         &config.daemon_dir,
@@ -161,7 +156,7 @@ fn run_server(config: Arc<Config>) -> Result<()> {
 fn init_tracer() {
     otel_global::set_text_map_propagator(TraceContextPropagator::new());
 
-    // Setup tracerprovider with stdout exporter
+    // Setup tracer provider with stdout exporter
     // that prints the spans to stdout.
     let provider = TracerProvider::builder()
         .with_simple_exporter(SpanExporter::default())

@@ -23,6 +23,9 @@ use crate::new_index::{
 use crate::util::fees::{make_fee_histogram, TxFeeInfo};
 use crate::util::{extract_tx_prevouts, full_hash, has_prevout, is_spendable, Bytes};
 
+use opentelemetry::{Context, global as otel_global, KeyValue};
+use opentelemetry::trace::{Span, SpanKind, TraceContextExt, Tracer};
+
 #[cfg(feature = "liquid")]
 use crate::elements::asset;
 
@@ -492,6 +495,11 @@ impl Mempool {
     }
 
     pub fn update(mempool: &Arc<RwLock<Mempool>>, daemon: &Daemon) -> Result<()> {
+        let tracer = otel_global::tracer("electrs");
+        let _ = tracer
+            .span_builder("update")
+            .with_kind(SpanKind::Server)
+            .start(&tracer);
         let _timer = mempool.read().unwrap().latency.with_label_values(&["update"]).start_timer();
 
         // 1. Determine which transactions are no longer in the daemon's mempool and which ones have newly entered it

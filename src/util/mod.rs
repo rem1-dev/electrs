@@ -1,13 +1,16 @@
-mod block;
-mod script;
-mod transaction;
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::mpsc::{channel, Receiver, Sender, sync_channel, SyncSender};
+use std::thread;
 
-pub mod bincode;
-pub mod electrum_merkle;
-pub mod fees;
+use bitcoin::hashes::sha256d::Hash as Sha256dHash;
+use opentelemetry::trace::{TraceContextExt, Tracer};
+use socket2::{Domain, Protocol, Socket, Type};
+
+use crate::chain::BlockHeader;
 
 pub use self::block::{
-    BlockHeaderMeta, BlockId, BlockMeta, BlockStatus, HeaderEntry, HeaderList, DEFAULT_BLOCKHASH,
+    BlockHeaderMeta, BlockId, BlockMeta, BlockStatus, DEFAULT_BLOCKHASH, HeaderEntry, HeaderList,
 };
 pub use self::fees::get_tx_fee;
 pub use self::script::{get_innerscripts, ScriptToAddr, ScriptToAsm};
@@ -16,14 +19,13 @@ pub use self::transaction::{
     TransactionStatus, TxInput,
 };
 
-use std::collections::HashMap;
-use std::sync::mpsc::{channel, sync_channel, Receiver, Sender, SyncSender};
-use std::thread;
+mod block;
+mod script;
+mod transaction;
 
-use crate::chain::BlockHeader;
-use bitcoin::hashes::sha256d::Hash as Sha256dHash;
-use socket2::{Domain, Protocol, Socket, Type};
-use std::net::SocketAddr;
+pub mod bincode;
+pub mod electrum_merkle;
+pub mod fees;
 
 pub type Bytes = Vec<u8>;
 pub type HeaderMap = HashMap<Sha256dHash, BlockHeader>;

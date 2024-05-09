@@ -11,13 +11,13 @@ use hex::FromHex;
 use itertools::Itertools;
 use serde_json::{from_str, from_value, Value};
 
-use opentelemetry::{Context, global as otel_global};
+use opentelemetry::{Context, global as otel_global, KeyValue};
 
 #[cfg(not(feature = "liquid"))]
 use bitcoin::consensus::encode::{deserialize, serialize_hex};
 #[cfg(feature = "liquid")]
 use elements::encode::{deserialize, serialize_hex};
-use opentelemetry::trace::{SpanKind, TraceContextExt, Tracer};
+use opentelemetry::trace::{Span, SpanKind, TraceContextExt, Tracer};
 
 use crate::chain::{Block, BlockHash, BlockHeader, Network, Transaction, Txid};
 use crate::metrics::{HistogramOpts, HistogramVec, Metrics};
@@ -100,6 +100,16 @@ fn parse_jsonrpc_reply(mut reply: Value, method: &str, expected_id: u64) -> Resu
     bail!("non-object reply: {:?}", reply);
 }
 
+macro_rules! create_span {
+    ($span_name:expr) => {{
+        let tracer = otel_global::tracer("electrs");
+        let _ = tracer
+            .span_builder($span_name)
+            .with_kind(SpanKind::Server)
+            .start(&tracer);
+    }};
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct BlockchainInfo {
     pub chain: String,
@@ -164,6 +174,7 @@ impl Connection {
     }
 
     fn reconnect(&self) -> Result<Connection> {
+        create_span!("reconnect");
         Connection::new(self.addr, self.cookie_getter.clone(), self.signal.clone())
     }
 
@@ -336,6 +347,7 @@ impl Daemon {
     }
 
     pub fn reconnect(&self) -> Result<Daemon> {
+        create_span!("reconnect");
         Ok(Daemon {
             daemon_dir: self.daemon_dir.clone(),
             blocks_dir: self.blocks_dir.clone(),
@@ -364,6 +376,7 @@ impl Daemon {
     }
 
     fn call_jsonrpc(&self, method: &str, request: &Value) -> Result<Value> {
+        create_span!("call_jsonrpc");
         let mut conn = self.conn.lock().unwrap();
         let timer = self.latency.with_label_values(&[method]).start_timer();
         let request = request.to_string();
@@ -381,6 +394,7 @@ impl Daemon {
     }
 
     fn handle_request_batch(&self, method: &str, params_list: &[Value]) -> Result<Vec<Value>> {
+        create_span!("handle_request_batch");
         let id = self.message_id.next();
         let chunks = params_list
             .iter()
@@ -403,6 +417,7 @@ impl Daemon {
     }
 
     fn retry_request_batch(&self, method: &str, params_list: &[Value]) -> Result<Vec<Value>> {
+        create_span!("retry_request_batch");
         loop {
             match self.handle_request_batch(method, params_list) {
                 Err(Error(ErrorKind::Connection(msg), _)) => {
@@ -418,22 +433,7 @@ impl Daemon {
     }
 
     fn request(&self, method: &str, params: Value) -> Result<Value> {
-        let extractor: HashMap<String, String> = HashMap::new();
-        let parent_ctx = otel_global::get_text_map_propagator(|propagator| {
-            propagator.extract(&extractor)
-        });
-        // Create a span parenting the remote client span.
-        let tracer = otel_global::tracer("electrs");
-        let span = tracer
-            .span_builder("request")
-            .with_kind(SpanKind::Server)
-            .start_with_context(&tracer, &parent_ctx);
-
-        let cx = Context::default().with_span(span);
-        let mut injector = HashMap::new();
-        otel_global::get_text_map_propagator(|propagator| {
-            propagator.inject_context(&cx, &mut injector)
-        });
+        create_span!("request");
 
         let mut values = self.retry_request_batch(method, &[params])?;
         assert_eq!(values.len(), 1);
@@ -457,22 +457,7 @@ impl Daemon {
     }
 
     pub fn getbestblockhash(&self) -> Result<BlockHash> {
-        let extractor: HashMap<String, String> = HashMap::new();
-        let parent_ctx = otel_global::get_text_map_propagator(|propagator| {
-            propagator.extract(&extractor)
-        });
-        // Create a span parenting the remote client span.
-        let tracer = otel_global::tracer("electrs");
-        let span = tracer
-            .span_builder("getbestblockhash")
-            .with_kind(SpanKind::Server)
-            .start_with_context(&tracer, &parent_ctx);
-
-        let cx = Context::default().with_span(span);
-        let mut injector = HashMap::new();
-        otel_global::get_text_map_propagator(|propagator| {
-            propagator.inject_context(&cx, &mut injector)
-        });
+        create_span!("getbestblockhash");
 
         parse_hash(&self.request("getbestblockhash", json!([]))?)
     }
@@ -631,6 +616,7 @@ impl Daemon {
         indexed_headers: &HeaderList,
         bestblockhash: &BlockHash,
     ) -> Result<Vec<BlockHeader>> {
+        create_span!("get_new_headers");
         // Iterate back over headers until known blockash is found:
         if indexed_headers.is_empty() {
             debug!("downloading all block headers up to {}", bestblockhash);

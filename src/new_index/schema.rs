@@ -8,6 +8,10 @@ use hex::FromHex;
 use itertools::Itertools;
 use rayon::prelude::*;
 
+use opentelemetry::{
+    global as otel_global,
+};
+
 #[cfg(not(feature = "liquid"))]
 use bitcoin::consensus::encode::{deserialize, serialize};
 #[cfg(feature = "liquid")]
@@ -20,6 +24,7 @@ use elements::{
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, RwLock};
+use opentelemetry::trace::{SpanKind, Tracer};
 
 use crate::chain::{
     BlockHash, BlockHeader, Network, OutPoint, Script, Transaction, TxOut, Txid, Value,
@@ -249,6 +254,11 @@ impl Indexer {
     }
 
     fn get_new_headers(&self, daemon: &Daemon, tip: &BlockHash) -> Result<Vec<HeaderEntry>> {
+        let tracer = otel_global::tracer("electrs");
+        let _ = tracer
+            .span_builder(String::from("run_server"))
+            .with_kind(SpanKind::Server)
+            .start(&tracer);
         let headers = self.store.indexed_headers.read().unwrap();
         let new_headers = daemon.get_new_headers(&headers, &tip)?;
         let result = headers.order(new_headers);
@@ -260,6 +270,11 @@ impl Indexer {
     }
 
     pub fn update(&mut self, daemon: &Daemon) -> Result<BlockHash> {
+        let tracer = otel_global::tracer("electrs");
+        let _ = tracer
+            .span_builder(String::from("run_server"))
+            .with_kind(SpanKind::Server)
+            .start(&tracer);
         let daemon = daemon.reconnect()?;
         let tip = daemon.getbestblockhash()?;
         let new_headers = self.get_new_headers(&daemon, &tip)?;
