@@ -40,6 +40,7 @@ pub fn start_fetcher(
     fetcher(daemon, new_headers)
 }
 
+#[derive(Clone)]
 pub struct BlockEntry {
     pub block: Block,
     pub entry: HeaderEntry,
@@ -102,6 +103,7 @@ fn bitcoind_fetcher(
                 sender
                     .send(block_entries)
                     .expect("failed to send fetched blocks");
+                log::debug!("last fetch {:?}", entries.last());
             }
         }),
     ))

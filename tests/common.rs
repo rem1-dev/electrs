@@ -1,6 +1,8 @@
+use std::str::FromStr;
 use std::sync::{Arc, Once, RwLock};
 use std::{env, net};
 
+use log::LevelFilter;
 use stderrlog::StdErrLog;
 use tempfile::TempDir;
 
@@ -53,7 +55,7 @@ impl TestRunner {
             #[cfg(feature = "liquid")]
             node_conf.args.push("-anyonecanspendaremine=1");
 
-            node_conf.view_stdout = true;
+            node_conf.view_stdout = std::env::var_os("RUST_LOG").is_some();
         }
 
         // Setup node
@@ -89,6 +91,7 @@ impl TestRunner {
             network_type,
             db_path: electrsdb.path().to_path_buf(),
             daemon_dir: daemon_subdir.clone(),
+            daemon_parallelism: 3,
             blocks_dir: daemon_subdir.join("blocks"),
             daemon_rpc_addr: params.rpc_socket.into(),
             cookie: None,
@@ -111,6 +114,7 @@ impl TestRunner {
             asset_db_path: None, // XXX
             #[cfg(feature = "liquid")]
             parent_network: bitcoin::Network::Regtest,
+            initial_sync_compaction: false,
             //#[cfg(feature = "electrum-discovery")]
             //electrum_public_hosts: Option<crate::electrum::ServerHosts>,
             //#[cfg(feature = "electrum-discovery")]
@@ -127,6 +131,7 @@ impl TestRunner {
             &config.daemon_dir,
             &config.blocks_dir,
             config.daemon_rpc_addr,
+            config.daemon_parallelism,
             config.cookie_getter(),
             config.network_type,
             signal.clone(),
@@ -147,7 +152,7 @@ impl TestRunner {
         };
 
         let mut indexer = Indexer::open(Arc::clone(&store), fetch_from, &config, &metrics);
-        indexer.update(&daemon)?;
+        let tip = indexer.update(&daemon)?;
         indexer.fetch_from(FetchFrom::Bitcoind);
 
         let chain = Arc::new(ChainQuery::new(
@@ -162,7 +167,7 @@ impl TestRunner {
             &metrics,
             Arc::clone(&config),
         )));
-        Mempool::update(&mempool, &daemon)?;
+        assert!(Mempool::update(&mempool, &daemon, &tip)?);
 
         let query = Arc::new(Query::new(
             Arc::clone(&chain),
@@ -193,8 +198,8 @@ impl TestRunner {
     }
 
     pub fn sync(&mut self) -> Result<()> {
-        self.indexer.update(&self.daemon)?;
-        Mempool::update(&self.mempool, &self.daemon)?;
+        let tip = self.indexer.update(&self.daemon)?;
+        assert!(Mempool::update(&self.mempool, &self.daemon, &tip)?);
         // force an update for the mempool stats, which are normally cached
         self.mempool.write().unwrap().update_backlog_stats();
         Ok(())
@@ -310,7 +315,11 @@ fn generate(
 fn init_log() -> StdErrLog {
     static ONCE: Once = Once::new();
     let mut log = stderrlog::new();
-    log.verbosity(4);
+    match std::env::var("RUST_LOG") {
+        Ok(e) => log.verbosity(LevelFilter::from_str(&e).unwrap_or(LevelFilter::Off)),
+        Err(_) => log.verbosity(0),
+    };
+
     // log.timestamp(stderrlog::Timestamp::Millisecond        );
     ONCE.call_once(|| log.init().expect("logging initialization failed"));
     log
