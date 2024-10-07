@@ -128,7 +128,7 @@ impl Query {
     }
 
     #[instrument(skip_all, name="query::Query::lookup_txos")]
-    pub fn lookup_txos(&self, outpoints: &BTreeSet<OutPoint>) -> HashMap<OutPoint, TxOut> {
+    pub fn lookup_txos(&self, outpoints: BTreeSet<OutPoint>) -> HashMap<OutPoint, TxOut> {
         // the mempool lookup_txos() internally looks up confirmed txos as well
         self.mempool()
             .lookup_txos(outpoints)
